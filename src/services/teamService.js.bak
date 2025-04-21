@@ -1,0 +1,176 @@
+// src/services/teamService.js
+import axios from 'axios';
+import { API_TEAMS_URL } from '../config/env';
+
+// Get All Teams (Admin Only)
+export const getAllTeams = async () => {
+    try {
+        const { data } = await axios.get(API_TEAMS_URL, {
+            headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
+        });
+        return data;
+    } catch (error) {
+        console.error('Failed to fetch team data:', error);
+        console.error('Error details:', error.response ? error.response.data : 'No response data');
+        return [];
+    }
+};
+
+// Get Manager's Team (Team Manager Only)
+export const getManagerTeam = async () => {
+    try {
+        const { data } = await axios.get(`${API_TEAMS_URL}/my-team`, {
+            headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
+        });
+        console.log('Team manager team data:', data);
+        return data;
+    } catch (error) {
+        console.error('Failed to fetch team manager data:', error);
+        console.error('Error details:', error.response ? error.response.data : 'No response data');
+        
+        // Fallback: If the specific endpoint fails, try to fetch all teams and filter
+        try {
+            const { data } = await axios.get(API_TEAMS_URL, {
+                headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
+            });
+            
+            if (Array.isArray(data)) {
+                // Try to extract user ID to find their own team
+                const token = localStorage.getItem('token');
+                let userId = null;
+                
+                try {
+                    if (token) {
+                        const tokenParts = token.split('.');
+                        const tokenPayload = JSON.parse(atob(tokenParts[1]));
+                        userId = tokenPayload.id;
+                    }
+                } catch (e) {
+                    console.error('Error extracting user ID from token:', e);
+                }
+                
+                if (userId) {
+                    // Find team where current user is the team manager
+                    const managerTeam = data.find(team => 
+                        team.teamManager && 
+                        (team.teamManager._id === userId || team.teamManager.id === userId)
+                    );
+                    
+                    if (managerTeam) {
+                        console.log('Found manager team via fallback:', managerTeam);
+                        return [managerTeam]; // Return as array to maintain consistency
+                    }
+                }
+            }
+        } catch (fallbackError) {
+            console.error('Fallback team fetch also failed:', fallbackError);
+        }
+        
+        return [];
+    }
+};
+
+// Add Team (Admin Only)
+export const addTeam = async (teamData) => {
+    try {
+        const { data } = await axios.post(API_TEAMS_URL, teamData, {
+            headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
+        });
+        return data;
+    } catch (error) {
+        console.error('Failed to add team:', error);
+        throw error;
+    }
+};
+
+// Update Team (Admin Only)
+export const updateTeam = async (teamId, teamData) => {
+    try {
+        const { data } = await axios.put(`${API_TEAMS_URL}/${teamId}`, teamData, {
+            headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
+        });
+        return data;
+    } catch (error) {
+        console.error('Failed to update team:', error);
+        throw error;
+    }
+};
+
+// Delete Team (Admin Only)
+export const deleteTeam = async (teamId) => {
+    try {
+        const { data } = await axios.delete(`${API_TEAMS_URL}/${teamId}`, {
+            headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
+        });
+        return data;
+    } catch (error) {
+        console.error('Failed to delete team:', error);
+        throw error;
+    }
+};
+
+// Get Team Members (for Team Manager)
+export const getTeamMembers = async () => {
+    try {
+        console.log("Fetching team members for current team manager");
+        
+        // Use a direct API endpoint that's known to exist in the backend
+        // Try using teams endpoint instead of my-team
+        const teamResponse = await axios.get(`${API_TEAMS_URL}`, {
+            headers: { 
+                Authorization: `Bearer ${localStorage.getItem('token')}`,
+                'Cache-Control': 'no-cache'
+            }
+        });
+        
+        console.log("Team API response:", teamResponse.data);
+        
+        // Extract user ID from token
+        const token = localStorage.getItem('token');
+        let userId = null;
+        
+        try {
+            if (token) {
+                const tokenParts = token.split('.');
+                const tokenPayload = JSON.parse(atob(tokenParts[1]));
+                userId = tokenPayload.id;
+                console.log("Extracted user ID from token:", userId);
+            }
+        } catch (e) {
+            console.error('Error extracting user ID from token:', e);
+        }
+        
+        if (!userId) {
+            console.warn("Could not determine user ID for team member lookup");
+            return [];
+        }
+        
+        // From the list of all teams, find the one where this user is a manager
+        const allTeams = Array.isArray(teamResponse.data) ? teamResponse.data : [];
+        
+        if (allTeams.length === 0) {
+            console.warn("No teams found in response");
+            return [];
+        }
+        
+        // Find the team where this user is the manager
+        const managerTeam = allTeams.find(team => 
+            team.teamManager && 
+            (team.teamManager._id === userId || team.teamManager.id === userId)
+        );
+        
+        if (managerTeam && managerTeam.members && Array.isArray(managerTeam.members)) {
+            console.log(`Found ${managerTeam.members.length} team members via team lookup`);
+            return managerTeam.members;
+        }
+        
+        console.warn("No team found where user is manager");
+        return [];
+    } catch (error) {
+        console.error('Error fetching team members:', error);
+        console.error('Error details:', error.response ? error.response.data : 'No response data');
+        
+        // Return empty array as fallback
+        return [];
+    }
+};
