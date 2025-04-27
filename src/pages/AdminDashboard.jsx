@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import Card from '@/components/ui/card';
 import { getAllSales, getAllEmployeesMonthlyPerformance, getAllTeamsMonthlyPerformance } from '@/services/salesService';
@@ -23,22 +23,9 @@ const monthNames = [
     "July", "August", "September", "October", "November", "December"
 ];
 
-// Generate year options (current year and 4 previous years)
-const currentYear = 2025; // Set to 2025 to ensure data is shown - data exists for this year
+// Generate current year
+const currentYear = new Date().getFullYear();
 const currentMonth = new Date().getMonth() + 1; // 1-12 range
-
-// Define a wider range of years that includes all data
-const yearOptions = [
-    { value: 2025, label: "2025", isDisabled: false },
-    { value: 2024, label: "2024", isDisabled: false },
-    { value: 2023, label: "2023", isDisabled: false },
-    { value: 2022, label: "2022", isDisabled: false },
-    { value: 2021, label: "2021", isDisabled: false }
-];
-
-// Define the default start and end years for filtering
-const DEFAULT_START_YEAR = 2024;
-const DEFAULT_END_YEAR = 2025;
 
 // Month options with disabled status to be set dynamically
 const monthOptions = [
@@ -56,6 +43,15 @@ const monthOptions = [
     { value: 12, label: 'December', isDisabled: false }
 ];
 
+// Define the default start and end years for filtering
+const DEFAULT_START_YEAR = currentYear - 1;
+const DEFAULT_END_YEAR = currentYear;
+
+// Initial year options - will be dynamically updated
+const initialYearOptions = [
+    { value: currentYear, label: currentYear.toString(), isDisabled: false }
+];
+
 // Helper function to check if a date is in the future
 const isFutureDate = (year, month) => {
     const now = new Date();
@@ -63,14 +59,12 @@ const isFutureDate = (year, month) => {
     return selectedDate > now;
 };
 
-// Function to get available months based on selected year
+// Get available months based on selected year
 const getAvailableMonths = (selectedYear) => {
     if (!selectedYear) return monthOptions;
     
-    return monthOptions.map(month => ({
-        ...month,
-        isDisabled: selectedYear.value === currentYear && month.value > currentMonth
-    }));
+    // Return all months without any restrictions
+    return monthOptions;
 };
 
 const AdminDashboard = () => {
@@ -87,12 +81,13 @@ const AdminDashboard = () => {
     const [performance, setPerformance] = useState(0);
     const [orderPerformance, setOrderPerformance] = useState(0);
     const [orderMonthlyPerformance, setOrderMonthlyPerformance] = useState(0);
+    const [yearOptions, setYearOptions] = useState(initialYearOptions);
 
     // Filter state
     const [startMonth, setStartMonth] = useState(null);
-    const [startYear, setStartYear] = useState(yearOptions[0]); // Default to current year
+    const [startYear, setStartYear] = useState(null); // Will be set after data load
     const [endMonth, setEndMonth] = useState(null);
-    const [endYear, setEndYear] = useState(yearOptions[0]); // Default to current year
+    const [endYear, setEndYear] = useState(null); // Will be set after data load
     const [filterType, setFilterType] = useState({ value: 'month-range', label: 'Month Range' });
     // Filter status message
     const [filterStatus, setFilterStatus] = useState("Showing All data till today");
@@ -120,19 +115,119 @@ const AdminDashboard = () => {
     }, [startYear, endYear]);
 
     useEffect(() => {
-        fetchDashboardData();
+        // Initialize the dashboard
+        const initializeDashboard = async () => {
+            try {
+                setLoading(true);
+                
+                // First determine available years
+                console.log("Initializing dashboard - fetching available years...");
+                await determineAvailableYears();
+                
+                // Then fetch dashboard data
+                console.log("Fetching dashboard data with available year options...");
+                await fetchDashboardData();
+                
+                // Update filter status
+                updateFilterStatus();
+            } catch (error) {
+                console.error("Error initializing dashboard:", error);
+                toast.error("Failed to initialize dashboard");
+            } finally {
+                setLoading(false);
+            }
+        };
         
-        // Set initial filter status
-        updateFilterStatus();
+        initializeDashboard();
     }, []);
     
-    // Modified: Remove automatic fetch when filters change
-    // useEffect(() => {
-    //     // Trigger fetchDashboardData when the component mounts with default filters
-    //     if (startYear && endYear) {
-    //         fetchDashboardData();
-    //     }
-    // }, [startMonth, startYear, endMonth, endYear]);
+    // Determine available years based on data
+    const determineAvailableYears = async () => {
+        try {
+            console.log("Determining available years from data...");
+            
+            // Fetch all data to analyze available years
+            const [allSales, allOrders, allTargets] = await Promise.all([
+                getAllSales({}),
+                getAllOrders({}),
+                getAllTargets({})
+            ]);
+            
+            // Get years from sales data
+            const salesYears = Array.isArray(allSales) ? 
+                [...new Set(allSales.map(sale => {
+                    const date = new Date(sale.date || sale.createdAt);
+                    return date.getFullYear();
+                }).filter(Boolean))] : [];
+                
+            console.log("Years from sales:", salesYears);
+            
+            // Get years from orders data
+            const orderYears = Array.isArray(allOrders) ? 
+                [...new Set(allOrders.map(order => {
+                    const date = new Date(order.date || order.createdAt);
+                    return date.getFullYear();
+                }).filter(Boolean))] : [];
+                
+            console.log("Years from orders:", orderYears);
+            
+            // Get years from targets data
+            const targetYears = Array.isArray(allTargets) ? 
+                [...new Set(allTargets.map(target => parseInt(String(target.year))).filter(Boolean))] : [];
+                
+            console.log("Years from targets:", targetYears);
+            
+            // Combine all years
+            const allYears = [...new Set([...salesYears, ...orderYears, ...targetYears])];
+            
+            // Add current year if not already included
+            if (!allYears.includes(currentYear)) {
+                allYears.push(currentYear);
+            }
+            
+            // Sort years in descending order
+            allYears.sort((a, b) => b - a);
+            
+            console.log("All available years:", allYears);
+            
+            // Create year options
+            const newYearOptions = allYears.map(year => ({
+                value: year,
+                label: year.toString(),
+                isDisabled: false
+            }));
+            
+            // Update year options state
+            setYearOptions(newYearOptions);
+            
+            // Set default years
+            if (newYearOptions.length > 0) {
+                const defaultStartYearOption = newYearOptions.find(opt => opt.value === DEFAULT_START_YEAR) || newYearOptions[0];
+                const defaultEndYearOption = newYearOptions.find(opt => opt.value === DEFAULT_END_YEAR) || newYearOptions[0];
+                
+                setStartYear(defaultStartYearOption);
+                setEndYear(defaultEndYearOption);
+            }
+            
+            return allYears;
+        } catch (error) {
+            console.error("Error determining available years:", error);
+            toast.error("Failed to determine available years");
+            
+            // Fallback to current year and past 4 years
+            const fallbackYears = Array.from({ length: 5 }, (_, i) => ({
+                value: currentYear - i,
+                label: (currentYear - i).toString(),
+                isDisabled: false
+            }));
+            
+            setYearOptions(fallbackYears);
+            setStartYear(fallbackYears[0]);
+            setEndYear(fallbackYears[0]);
+            
+            return [currentYear];
+        }
+    };
     
     // Validate silently but don't show errors yet
     useEffect(() => {
@@ -150,15 +245,6 @@ const AdminDashboard = () => {
             endDate: '',
             range: ''
         };
-
-        // Check for future dates
-        if (startYear && startMonth && isFutureDate(startYear.value, startMonth.value)) {
-            errors.startDate = 'Cannot select future dates';
-        }
-        
-        if (endYear && endMonth && isFutureDate(endYear.value, endMonth.value)) {
-            errors.endDate = 'Cannot select future dates';
-        }
 
         // Month range validation
         if (filterType.value === 'month-range') {
@@ -184,16 +270,6 @@ const AdminDashboard = () => {
         } 
         // Year range validation
         else if (filterType.value === 'year-range') {
-            // Check for future year in start year
-            if (startYear && startYear.value > currentYear) {
-                errors.startDate = 'Cannot select future years';
-            }
-            
-            // Check for future year in end year
-            if (endYear && endYear.value > currentYear) {
-                errors.endDate = 'Cannot select future years';
-            }
-            
             // Check if end year is earlier than start year
             if (startYear && endYear && endYear.value < startYear.value) {
                 errors.endDate = 'End year cannot be earlier than start year';
@@ -203,11 +279,6 @@ const AdminDashboard = () => {
         else if (filterType.value === 'month-only') {
             if (startYear && !startMonth) {
                 errors.startDate = 'Please select a month';
-            }
-            
-            // Check for future date in month-only mode
-            if (startYear && startMonth && isFutureDate(startYear.value, startMonth.value)) {
-                errors.startDate = 'Cannot select future dates';
             }
         }
         
@@ -219,6 +290,11 @@ const AdminDashboard = () => {
     // Prepare filter params
     const getFilterParams = () => {
         let params = {};
+        
+        // If years aren't loaded yet, return empty params
+        if (!startYear && !endYear) {
+            return params;
+        }
         
         if (!filterType || filterType.value === 'month-range') {
             // Case 1: If both From and To dates are provided
@@ -239,8 +315,10 @@ const AdminDashboard = () => {
             }
             // Case 3: If only To date is provided (all data up to that date)
             else if (endMonth && endYear) {
-                // Default to the earliest data we have - 2021
-                const earliestYear = 2021;
+                // Use the earliest year from year options instead of hardcoded value
+                const earliestYear = yearOptions.length > 0 
+                    ? Math.min(...yearOptions.map(opt => opt.value))
+                    : DEFAULT_START_YEAR;
                 
                 params = {
                     startMonth: 1, // January
@@ -294,36 +372,16 @@ const AdminDashboard = () => {
     const fetchDashboardData = async () => {
         setLoading(true);
         try {
+            // First, determine available years
+            await determineAvailableYears();
+            
+            // Now get filter parameters (may use the newly set year options)
             const filterParams = getFilterParams();
             
-            // If no filters are applied, set defaults to include data from both 2024 and 2025
+            // If no filters are applied, keep params empty to show all data
             if (Object.keys(filterParams).length === 0) {
-                if (!filterType || filterType.value === 'month-range') {
-                    filterParams.startMonth = 1; // January
-                    filterParams.startYear = DEFAULT_START_YEAR; // Start from 2024
-                    filterParams.endMonth = 12; // December
-                    filterParams.endYear = DEFAULT_END_YEAR; // Include up to 2025
-                    
-                    // Update status message
-                    setFilterStatus(`Showing All data from ${DEFAULT_START_YEAR} to ${DEFAULT_END_YEAR}`);
-                } else if (filterType.value === 'year-range') {
-                    filterParams.startMonth = 1; // January
-                    filterParams.startYear = DEFAULT_START_YEAR; // Start from 2024
-                    filterParams.endMonth = 12; // December
-                    filterParams.endYear = DEFAULT_END_YEAR; // Include up to 2025
-                    
-                    // Update status message
-                    setFilterStatus(`Showing All data from ${DEFAULT_START_YEAR} to ${DEFAULT_END_YEAR}`);
-                } else if (filterType.value === 'month-only') {
-                    // For month-only, use current month in 2024 as default
-                    const currentMonth = new Date().getMonth() + 1;
-                    const currentMonthName = monthNames[currentMonth];
-                    filterParams.month = currentMonth;
-                    filterParams.year = DEFAULT_START_YEAR; // Use 2024 as default
-                    
-                    // Update status message
-                    setFilterStatus(`Showing ${currentMonthName} ${DEFAULT_START_YEAR}`);
-                }
+                // Update status message to show all data
+                setFilterStatus("Showing All data till today");
             }
             
             console.log("Applying filters to all API calls:", filterParams);
@@ -498,62 +556,55 @@ const AdminDashboard = () => {
     };
 
     // Reset filters button click handler
-    const handleResetFilters = () => {
-        // Reset to default filter type
-        setFilterType({ value: 'month-range', label: 'Month Range' });
-        
-        // Clear month selections
-        setStartMonth(null);
-        setEndMonth(null);
-        
-        // Find the appropriate year options
-        const startYearOption = yearOptions.find(opt => opt.value === DEFAULT_START_YEAR) || yearOptions[0];
-        const endYearOption = yearOptions.find(opt => opt.value === DEFAULT_END_YEAR) || yearOptions[0];
-        
-        // Set years to our default range
-        setStartYear(startYearOption);
-        setEndYear(endYearOption);
-        
-        // Reset error display
-        setShowErrors(false);
-        setDateErrors({
-            startDate: '',
-            endDate: '',
-            range: ''
-        });
-        
-        // Update filter status
-        setFilterStatus(`Showing All data from ${DEFAULT_START_YEAR} to ${DEFAULT_END_YEAR}`);
-        
-        // Use our constant defaults for filter params
-        const defaultParams = {
-            startMonth: 1, // January
-            startYear: DEFAULT_START_YEAR,
-            endMonth: 12, // December
-            endYear: DEFAULT_END_YEAR
-        };
-        
+    const handleResetFilters = async () => {
         // Show loading state
         setLoading(true);
         
-        // Fetch with explicit default params
-        fetchDashboardDataWithParams(defaultParams)
-            .then(() => {
-                console.log("Filters reset successfully");
-            })
-            .catch(error => {
-                console.error("Error resetting filters:", error);
-                toast.error("Error resetting data");
-            })
-            .finally(() => {
-                setLoading(false);
+        try {
+            // First determine available years to ensure year options are updated
+            await determineAvailableYears();
+            
+            // Reset to default filter type
+            setFilterType({ value: 'month-range', label: 'Month Range' });
+            
+            // Clear all selections
+            setStartMonth(null);
+            setEndMonth(null);
+            setStartYear(null);
+            setEndYear(null);
+            
+            // Reset error display
+            setShowErrors(false);
+            setDateErrors({
+                startDate: '',
+                endDate: '',
+                range: ''
             });
+            
+            // Update filter status
+            setFilterStatus("Showing All data till today");
+            
+            // Use empty params to fetch all data without date restrictions
+            const defaultParams = {};
+            
+            // Fetch with empty params to get all data
+            await fetchDashboardDataWithParams(defaultParams);
+            console.log("Filters reset successfully - showing all data till today");
+        } catch (error) {
+            console.error("Error resetting filters:", error);
+            toast.error("Error resetting data");
+        } finally {
+            setLoading(false);
+        }
     };
     
     // Fetch data with explicit params
     const fetchDashboardDataWithParams = async (params) => {
         try {
             console.log("Fetching dashboard data with params:", params);
+            
+            // Update available years first
+            await determineAvailableYears();
             
             try {
                 // Pass filter params to API calls
@@ -984,19 +1035,6 @@ const AdminDashboard = () => {
                                                 }));
                                             }
                                         }
-                                        
-                                        // Check for future date
-                                        if (value && startYear && isFutureDate(startYear.value, value.value)) {
-                                            setDateErrors(prev => ({
-                                                ...prev,
-                                                startDate: 'Cannot select future dates'
-                                            }));
-                                        } else {
-                                            setDateErrors(prev => ({
-                                                ...prev,
-                                                startDate: ''
-                                            }));
-                                        }
                                     }}
                                     placeholder="Month"
                                     isClearable
@@ -1022,19 +1060,6 @@ const AdminDashboard = () => {
                                                     range: ''
                                                 }));
                                             }
-                                        }
-                                        
-                                        // If month is already selected, check if it's now in the future
-                                        if (value && startMonth && isFutureDate(value.value, startMonth.value)) {
-                                            setDateErrors(prev => ({
-                                                ...prev,
-                                                startDate: 'Cannot select future dates'
-                                            }));
-                                        } else {
-                                            setDateErrors(prev => ({
-                                                ...prev,
-                                                startDate: ''
-                                            }));
                                         }
                                     }}
                                     placeholder="Year"
@@ -1072,19 +1097,6 @@ const AdminDashboard = () => {
                                                 }));
                                             }
                                         }
-                                        
-                                        // Check for future date
-                                        if (value && endYear && isFutureDate(endYear.value, value.value)) {
-                                            setDateErrors(prev => ({
-                                                ...prev,
-                                                endDate: 'Cannot select future dates'
-                                            }));
-                                        } else {
-                                            setDateErrors(prev => ({
-                                                ...prev,
-                                                endDate: ''
-                                            }));
-                                        }
                                     }}
                                     placeholder="Month"
                                     isClearable
@@ -1095,50 +1107,11 @@ const AdminDashboard = () => {
                                     value={endYear}
                                     onChange={(value) => {
                                         setEndYear(value);
-                                        
-                                        // Silently validate based on filter type
-                                        if (filterType.value === 'year-range') {
-                                            if (value && startYear && value.value < startYear.value) {
-                                                setDateErrors(prev => ({
-                                                    ...prev,
-                                                    endDate: 'End year cannot be earlier than start year'
-                                                }));
-                                            } else {
-                                                setDateErrors(prev => ({
-                                                    ...prev,
-                                                    endDate: ''
-                                                }));
-                                            }
-                                        } 
-                                        // Month range validation
-                                        else if (value && startMonth && startYear && endMonth) {
-                                            const startDate = new Date(startYear.value, startMonth.value - 1);
-                                            const endDate = new Date(value.value, endMonth.value - 1);
-                                            if (endDate < startDate) {
-                                                setDateErrors(prev => ({
-                                                    ...prev,
-                                                    range: 'End date cannot be earlier than start date'
-                                                }));
-                                            } else {
-                                                setDateErrors(prev => ({
-                                                    ...prev,
-                                                    range: ''
-                                                }));
-                                            }
-                                        }
-                                        
-                                        // If month is already selected, check if it's now in the future
-                                        if (value && endMonth && isFutureDate(value.value, endMonth.value)) {
-                                            setDateErrors(prev => ({
-                                                ...prev,
-                                                endDate: 'Cannot select future dates'
-                                            }));
-                                        } else {
-                                            setDateErrors(prev => ({
-                                                ...prev,
-                                                endDate: ''
-                                            }));
-                                        }
+                                        // No future year validation needed
+                                        setDateErrors(prev => ({
+                                            ...prev,
+                                            endDate: ''
+                                        }));
                                     }}
                                     placeholder="Year"
                                     className="w-28"
@@ -1197,19 +1170,6 @@ const AdminDashboard = () => {
                                             startDate: ''
                                         }));
                                     }
-                                    
-                                    // Check if end year is now earlier than start year
-                                    if (value && endYear && endYear.value < value.value) {
-                                        setDateErrors(prev => ({
-                                            ...prev,
-                                            endDate: 'End year cannot be earlier than start year'
-                                        }));
-                                    } else if (endYear) {
-                                        setDateErrors(prev => ({
-                                            ...prev,
-                                            endDate: ''
-                                        }));
-                                    }
                                 }}
                                 placeholder="Year"
                                 className="w-28"
@@ -1228,27 +1188,11 @@ const AdminDashboard = () => {
                                 value={endYear}
                                 onChange={(value) => {
                                     setEndYear(value);
-                                    
-                                    // Check if selected year is in the future
-                                    if (value && value.value > currentYear) {
-                                        setDateErrors(prev => ({
-                                            ...prev,
-                                            endDate: 'Cannot select future years'
-                                        }));
-                                    } else {
-                                        // Check if end year is earlier than start year
-                                        if (value && startYear && value.value < startYear.value) {
-                                            setDateErrors(prev => ({
-                                                ...prev,
-                                                endDate: 'End year cannot be earlier than start year'
-                                            }));
-                                        } else {
-                                            setDateErrors(prev => ({
-                                                ...prev,
-                                                endDate: ''
-                                            }));
-                                        }
-                                    }
+                                    // No future year validation needed
+                                    setDateErrors(prev => ({
+                                        ...prev,
+                                        endDate: ''
+                                    }));
                                 }}
                                 placeholder="Year"
                                 className="w-28"
@@ -1303,14 +1247,6 @@ const AdminDashboard = () => {
                                         setDateErrors(prev => ({
                                             ...prev,
                                             startDate: ''
-                                        }));
-                                    }
-                                    
-                                    // Check for future date
-                                    if (value && startYear && isFutureDate(startYear.value, value.value)) {
-                                        setDateErrors(prev => ({
-                                            ...prev,
-                                            startDate: 'Cannot select future dates'
                                         }));
                                     }
                                 }}
@@ -1439,7 +1375,7 @@ const AdminDashboard = () => {
                 
                 <motion.div variants={slideUp}>
                     <Card 
-                        title="Order Target" 
+                        title="Orders Target" 
                         icon={<Target size={20} />}
                     >
                         <p className="text-2xl sm:text-3xl font-bold text-primary">
@@ -1494,19 +1430,23 @@ const AdminDashboard = () => {
                                         return (
                                             <div className="bg-white shadow-md p-3 rounded-md text-sm">
                                                 <p className="font-bold mb-1">{data.name}</p>
-                                                <p className="text-gray-700">
-                                                    <span className="font-semibold">📊 Sales:</span> ₹{data.totalSalesAmount.toLocaleString()}
+                                                <p>
+                                                    <span className="text-black">Total Sales:</span>{' '}
+                                                    <span style={{ color: "#10B981" }} className="font-bold">
+                                                        ₹{data.totalSalesAmount.toLocaleString()}
+                                                    </span>
                                                 </p>
-                                                <p className="text-gray-700">
-                                                    <span className="font-semibold">🎯 Target:</span> ₹{data.targetAmount.toLocaleString()}
+                                                <p>
+                                                    <span className="text-black">Sales Target:</span>{' '}
+                                                    <span style={{ color: "#4F46E5" }} className="font-bold">
+                                                        ₹{data.targetAmount.toLocaleString()}
+                                                    </span>
                                                 </p>
-                                                <p className={`${data.performancePercentage >= 100 ? 'text-green-600' : 'text-yellow-600'}`}>
-                                                    <span className="font-semibold">📈 Performance:</span> {data.performancePercentage}%
-                                                </p>
-                                                <p className="text-gray-500 text-xs mt-1">
-                                                    {data.targetAmount > 0 
-                                                        ? `${Math.round((data.totalSalesAmount / data.targetAmount) * 100)}% of target` 
-                                                        : 'No target set'}
+                                                <p>
+                                                    <span className="text-black">Performance:</span>{' '}
+                                                    <span className={`font-bold ${data.performancePercentage >= 100 ? 'text-green-600' : 'text-yellow-600'}`}>
+                                                        {data.performancePercentage}%
+                                                    </span>
                                                 </p>
                                             </div>
                                         );
@@ -1516,7 +1456,7 @@ const AdminDashboard = () => {
                             />
                             <Legend />
                             <Bar dataKey="totalSalesAmount" fill="#10B981" name="Total Sales" />
-                            <Bar dataKey="targetAmount" fill="#4F46E5" name="Target" />
+                            <Bar dataKey="targetAmount" fill="#4F46E5" name="Sales Target" />
                         </BarChart>
                     </ResponsiveContainer>
                     ) : (
@@ -1567,19 +1507,23 @@ const AdminDashboard = () => {
                                             return (
                                                 <div className="bg-white shadow-md p-3 rounded-md text-sm">
                                                     <p className="font-bold mb-1">{data.name}</p>
-                                                    <p className="text-gray-700">
-                                                        <span className="font-semibold">📊 Orders:</span> ₹{data.totalOrderAmount.toLocaleString()}
+                                                    <p>
+                                                        <span className="text-black">Total Orders:</span>{' '}
+                                                        <span style={{ color: "#10B981" }} className="font-bold">
+                                                            ₹{data.totalOrderAmount.toLocaleString()}
+                                                        </span>
                                                     </p>
-                                                    <p className="text-gray-700">
-                                                        <span className="font-semibold">🎯 Target:</span> ₹{data.targetAmount.toLocaleString()}
+                                                    <p>
+                                                        <span className="text-black">Orders Target:</span>{' '}
+                                                        <span style={{ color: "#4F46E5" }} className="font-bold">
+                                                            ₹{data.targetAmount.toLocaleString()}
+                                                        </span>
                                                     </p>
-                                                    <p className={`${data.performancePercentage >= 100 ? 'text-green-600' : 'text-yellow-600'}`}>
-                                                        <span className="font-semibold">📈 Performance:</span> {data.performancePercentage}%
-                                                    </p>
-                                                    <p className="text-gray-500 text-xs mt-1">
-                                                        {data.targetAmount > 0 
-                                                            ? `${Math.round((data.totalOrderAmount / data.targetAmount) * 100)}% of target` 
-                                                            : 'No target set'}
+                                                    <p>
+                                                        <span className="text-black">Performance:</span>{' '}
+                                                        <span className={`font-bold ${data.performancePercentage >= 100 ? 'text-green-600' : 'text-yellow-600'}`}>
+                                                            {data.performancePercentage}%
+                                                        </span>
                                                     </p>
                                                 </div>
                                             );
@@ -1589,7 +1533,7 @@ const AdminDashboard = () => {
                                 />
                                 <Legend />
                                 <Bar dataKey="totalOrderAmount" fill="#10B981" name="Total Orders" />
-                                <Bar dataKey="targetAmount" fill="#4F46E5" name="Target" />
+                                <Bar dataKey="targetAmount" fill="#4F46E5" name="Orders Target" />
                             </BarChart>
                     </ResponsiveContainer>
                     ) : (

@@ -15,27 +15,9 @@ const Login = () => {
     const [isLoading, setIsLoading] = useState(false);
     const navigate = useNavigate();
 
-    // Function to update favicon during loading
-    const updateFavicon = (isLoading) => {
-        const favicon = document.querySelector("link[rel*='icon']") || document.createElement('link');
-        favicon.type = 'image/x-icon';
-        favicon.rel = 'shortcut icon';
-        
-        if (isLoading) {
-            // Set a loading favicon (you can replace with your own loading favicon)
-            favicon.href = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="45" fill="none" stroke="%234F46E5" stroke-width="10"/></svg>';
-        } else {
-            // Reset to default favicon
-            favicon.href = '/favicon.ico';
-        }
-        
-        document.head.appendChild(favicon);
-    };
-
     const handleSubmit = async (e) => {
         e.preventDefault();
         setIsLoading(true);
-        updateFavicon(true);
         
         try {
             const { data } = await axios.post(`${API_AUTH_URL}/login`, { email, password });
@@ -79,7 +61,6 @@ const Login = () => {
             }
         } finally {
             setIsLoading(false);
-            updateFavicon(false);
         }
     };
 

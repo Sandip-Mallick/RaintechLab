@@ -61,76 +61,125 @@ const EmployeeDashboard = () => {
     const fetchAllDataAndDetermineYears = async () => {
         try {
             setLoading(true);
+            console.log("Determining available years from data...");
             
-            // Get user profile and permissions
+            // 1. Get user profile and determine permissions
             const userProfile = await getUserProfile();
-            const hasSalesPermission = userProfile?.permissions?.includes('sales') || userProfile?.role === 'admin';
-            const hasOrdersPermission = userProfile?.permissions?.includes('orders') || userProfile?.role === 'admin';
+            const hasSalesPermission = userProfile?.permissions?.includes('sales') || 
+                                      userProfile?.permissions === 'Sales' || 
+                                      userProfile?.permissions === 'Sales & Orders' || 
+                                      userProfile?.permissions === 'All Permissions' ||
+                                      userProfile?.role === 'admin';
+                                      
+            const hasOrdersPermission = userProfile?.permissions?.includes('orders') || 
+                                       userProfile?.permissions === 'Orders' || 
+                                       userProfile?.permissions === 'Sales & Orders' || 
+                                       userProfile?.permissions === 'All Permissions' ||
+                                       userProfile?.role === 'admin';
             
-            console.log("Fetching all data to determine available years");
+            console.log("User permissions:", {
+                hasSales: hasSalesPermission,
+                hasOrders: hasOrdersPermission
+            });
             
-            // Fetch targets
-            const targets = await getAssignedTargets();
+            // 2. Set permission state for UI visibility
+            setShowSalesData(hasSalesPermission);
+            setShowOrdersData(hasOrdersPermission);
             
-            // Get available years from targets
-            const targetYears = Array.isArray(targets) ? 
-                [...new Set(targets.map(target => parseInt(String(target.year))).filter(Boolean))] : [];
+            // 3. Determine available years from all data sources
+            let yearSources = [];
             
-            console.log("Years from targets:", targetYears);
+            // 3a. Get all assigned targets without year filter to determine target years
+            try {
+                const targets = await getAssignedTargets(); // No year filter to get all targets
+                const targetYears = Array.isArray(targets) ? 
+                    [...new Set(targets.map(target => parseInt(String(target.year))).filter(Boolean))] : [];
+                    
+                console.log("Years from targets:", targetYears);
+                yearSources.push(targetYears);
+            } catch (error) {
+                console.error("Error fetching targets:", error);
+            }
             
-            // Get sales data if permitted
-            let salesYears = [];
+            // 3b. Get sales data to determine sales years (if user has permission)
             if (hasSalesPermission) {
-                const sales = await getEmployeeSales();
-                salesYears = Array.isArray(sales) ? 
-                    [...new Set(sales.map(sale => {
-                        const date = new Date(sale.date || sale.createdAt);
-                        return date.getFullYear();
-                    }).filter(Boolean))] : [];
-                    
-                console.log("Years from sales:", salesYears);
+                try {
+                    const salesData = await getEmployeeSales(); // No year filter to get all sales
+                    const salesYears = Array.isArray(salesData) ? 
+                        [...new Set(salesData.map(sale => {
+                            const date = new Date(sale.date || sale.createdAt);
+                            return date.getFullYear();
+                        }).filter(Boolean))] : [];
+                        
+                    console.log("Years from sales data:", salesYears);
+                    yearSources.push(salesYears);
+                } catch (error) {
+                    console.error("Error fetching sales data:", error);
+                }
             }
             
-            // Get orders data if permitted
-            let orderYears = [];
+            // 3c. Get orders data to determine order years (if user has permission)
             if (hasOrdersPermission) {
-                const orders = await getEmployeeOrders();
-                orderYears = Array.isArray(orders) ? 
-                    [...new Set(orders.map(order => {
-                        const date = new Date(order.date || order.createdAt);
-                        return date.getFullYear();
-                    }).filter(Boolean))] : [];
-                    
-                console.log("Years from orders:", orderYears);
+                try {
+                    const ordersData = await getEmployeeOrders(); // No year filter to get all orders
+                    const orderYears = Array.isArray(ordersData) ? 
+                        [...new Set(ordersData.map(order => {
+                            const date = new Date(order.date || order.createdAt);
+                            return date.getFullYear();
+                        }).filter(Boolean))] : [];
+                        
+                    console.log("Years from orders data:", orderYears);
+                    yearSources.push(orderYears);
+                } catch (error) {
+                    console.error("Error fetching orders data:", error);
+                }
             }
             
-            // Combine all years
-            const allYears = [...new Set([...targetYears, ...salesYears, ...orderYears])];
+            // 4. Combine all years from all sources
+            const allYears = [...new Set(yearSources.flat())];
             
-            // Add current year if not already included
+            // 5. Add current year if not already included
             const currentYear = new Date().getFullYear();
             if (!allYears.includes(currentYear)) {
                 allYears.push(currentYear);
             }
             
-            // Sort years in descending order
-            allYears.sort((a, b) => b - a);
+            // Fallback: If no years were found from any source, add the last 3 years
+            if (allYears.length <= 1) {
+                console.log("Insufficient year data found, adding fallback years");
+                for (let i = 1; i <= 2; i++) {
+                    const fallbackYear = currentYear - i;
+                    if (!allYears.includes(fallbackYear)) {
+                        allYears.push(fallbackYear);
+                    }
+                }
+            }
             
+            // 6. Sort years in descending order (newest first)
+            allYears.sort((a, b) => b - a);
             console.log("All available years:", allYears);
             
-            // Update available years and default to current year
+            // 7. Update state with available years
             setAvailableYears(allYears);
-            setSelectedYear(currentYear.toString());
             
-            // Fetch initial data - show all data by default
+            // 8. Set current year as default selection if available
+            if (allYears.includes(currentYear)) {
+                setSelectedYear(currentYear.toString());
+            } else if (allYears.length > 0) {
+                setSelectedYear(allYears[0].toString());
+            }
+            
+            // 9. Initialize with all data
             setShowAllData(true);
             setHasFilteredData(false);
             setAppliedYear(null);
-            fetchPerformanceData(null, true);
+            
+            // 10. Fetch performance data for initial view
+            await fetchPerformanceData(null, true);
             
             setLoading(false);
         } catch (error) {
-            console.error("Error initializing data:", error);
+            console.error("Error determining available years:", error);
             toast.error("Failed to initialize dashboard data");
             setLoading(false);
         }
@@ -244,9 +293,11 @@ const EmployeeDashboard = () => {
                 hasOrders: hasOrdersPermission
             };
             
-            // Set permission state for UI visibility
-            setShowSalesData(hasSalesPermission);
-            setShowOrdersData(hasOrdersPermission);
+            // Only set permission state if not already set (to avoid overriding)
+            if (showSalesData === false && showOrdersData === false) {
+                setShowSalesData(hasSalesPermission);
+                setShowOrdersData(hasOrdersPermission);
+            }
             
             // Get assigned targets first - pass the filter year to the API
             console.log(`Fetching assigned targets for ${filterYear ? 'year ' + filterYear : 'all years'}`);
@@ -686,8 +737,8 @@ const EmployeeDashboard = () => {
             <div className="flex justify-between items-center mb-6">
                 <h1 className="text-3xl font-bold text-primary">Employee Dashboard</h1>
                 
-                <div className="flex items-center space-x-2">
-                    <div className="flex items-center space-x-2">
+                <div className="flex items-center">
+                    <div className="flex items-center gap-3">
                         <select
                             value={selectedYear}
                             onChange={handleYearChange}
@@ -701,19 +752,19 @@ const EmployeeDashboard = () => {
                         
                         <Button 
                             onClick={handleApplyFilter} 
-                            className="px-4 py-2 bg-primary hover:bg-primary-600 text-white rounded-md flex items-center"
+                            className="px-4 py-2 bg-primary hover:bg-primary-dark text-white rounded-lg font-medium transition-colors flex items-center"
                         >
                             <Filter size={16} className="mr-1" />
                             Apply
                         </Button>
                         
-                        <Button 
+                        <button 
                             onClick={handleReset} 
-                            className="bg-gray-100 text-gray-700 hover:bg-gray-200 py-2 px-4 rounded-md"
+                            className="px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg text-gray-700 font-medium transition-colors"
                             disabled={!hasFilteredData}
                         >
                             Reset
-                        </Button>
+                        </button>
                     </div>
                 </div>
             </div>
@@ -863,10 +914,9 @@ const EmployeeDashboard = () => {
                         {/* Display sales chart first if user has sales permission */}
                         {showSalesData && appliedYear && !showAllData && (
                             <div className="mb-8">
-                                <h3 className="text-lg font-medium mb-2 text-gray-700">Sales Data for {appliedYear}</h3>
                                 <MonthlyPerformanceSection 
                                     performanceData={monthlyPerformance} 
-                                    title="Sales Performance"
+                                    title={`Sales Performance (${appliedYear})`}
                                     hideYearSelector={true} // Hide the chart's year selector since we have one at the dashboard level
                                 />
                             </div>
@@ -884,10 +934,9 @@ const EmployeeDashboard = () => {
                         {/* Display orders chart below sales if user has orders permission */}
                         {showOrdersData && appliedYear && !showAllData && (
                             <div className={showSalesData ? "mt-10" : ""}>
-                                <h3 className="text-lg font-medium mb-2 text-gray-700">Order Data for {appliedYear}</h3>
                                 <MonthlyPerformanceSection 
                                     performanceData={monthlyOrderPerformance} 
-                                    title="Order Performance"
+                                    title={`Order Performance (${appliedYear})`}
                                     hideYearSelector={true} // Hide the chart's year selector since we have one at the dashboard level
                                 />
                             </div>

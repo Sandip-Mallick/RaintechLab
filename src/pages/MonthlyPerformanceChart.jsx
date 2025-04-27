@@ -565,7 +565,18 @@ const MonthlyPerformanceChart = ({ performanceData, title = "Monthly Performance
     return (
         <motion.div variants={fadeIn} className="w-full">
             <div className="flex justify-between items-center mb-4">
-                <h2 className="text-2xl font-semibold">{title}</h2>
+                <h2 className="text-2xl font-semibold">
+                    {title.includes('(') ? (
+                        <>
+                            {title.split('(')[0]}
+                            <span className="text-gray-600 font-normal">
+                                ({title.split('(')[1]}
+                            </span>
+                        </>
+                    ) : (
+                        title
+                    )}
+                </h2>
                 
                 {/* Only render the year selector if not hidden */}
                 {!hideYearSelector && (
@@ -593,7 +604,14 @@ const MonthlyPerformanceChart = ({ performanceData, title = "Monthly Performance
                             margin={{ top: 20, right: 30, left: 20, bottom: 20 }}
                         >
                             <CartesianGrid strokeDasharray="3 3" />
-                            <XAxis dataKey="name" />
+                            <XAxis 
+                                dataKey="name" 
+                                interval={0}
+                                angle={-45}
+                                textAnchor="end"
+                                height={50}
+                                tick={{fontSize: 12}}
+                            />
                             <YAxis />
                             <Tooltip content={<CustomTooltip />} />
                             <Legend />

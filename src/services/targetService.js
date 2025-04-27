@@ -142,42 +142,78 @@ export const getAssignedTargets = async (year = null) => {
 };
 
 // Get Team Member Targets (Team Manager)
-export const getTeamMemberTargets = async () => {
+export const getTeamMemberTargets = async (filters = {}) => {
     try {
         const token = localStorage.getItem('token');
         console.log("API URL for team targets:", `${API_TARGETS_URL}/team-members`);
+        console.log("Original filters being applied to targets:", filters);
+        
+        // Process filter parameters to match API expectations
+        const apiParams = {...filters};
+        
+        // Ensure consistency with sales/orders filter format
+        if (filters.startMonth && filters.startYear && filters.endMonth && filters.endYear) {
+            // Month range filter - prepare date ranges for the API
+            // These need to be converted to match the backend API format
+            apiParams.fromDate = `${filters.startYear}-${String(filters.startMonth).padStart(2, '0')}-01`;
+            apiParams.toDate = `${filters.endYear}-${String(filters.endMonth).padStart(2, '0')}-31`;
+            
+            // Keep the original params for client-side filtering if needed
+            apiParams.startMonth = filters.startMonth;
+            apiParams.startYear = filters.startYear;
+            apiParams.endMonth = filters.endMonth;
+            apiParams.endYear = filters.endYear;
+        }
+        
+        // For month-only filter
+        if (filters.month && filters.year && !filters.startMonth) {
+            apiParams.month = filters.month;
+            apiParams.year = filters.year;
+        }
+        
+        // For year-only filter
+        if (filters.year && !filters.month && !filters.startMonth) {
+            apiParams.year = filters.year;
+        }
         
         // Add timestamp to avoid caching issues
         const timestamp = new Date().getTime();
-        const response = await axios.get(`${API_TARGETS_URL}/team-members?_t=${timestamp}`, {
+        apiParams._t = timestamp;
+        
+        console.log("Final API params for target request:", apiParams);
+        
+        const response = await axios.get(`${API_TARGETS_URL}/team-members`, {
             headers: { 
                 Authorization: `Bearer ${token}`,
                 'Cache-Control': 'no-cache'
-            }
+            },
+            params: apiParams
         });
         
         console.log("API response for team member targets:", {
             status: response.status,
-            dataLength: response.data?.length || 0
+            dataLength: response.data?.length || 0,
+            appliedFilters: apiParams
         });
         
-        // If no data or empty array, return empty array
+        // If no data or empty array, try alternative endpoint
         if (!response.data || !Array.isArray(response.data) || response.data.length === 0) {
             console.log("No team member targets found in API response");
             
             // Try alternative endpoint as fallback
             try {
-                console.log("Trying alternative endpoint for team member targets");
+                console.log("Trying alternative endpoint for team member targets with filters:", apiParams);
                 const altResponse = await axios.get(`${API_TARGETS_URL}/team`, {
                     headers: { 
                         Authorization: `Bearer ${token}`,
                         'Cache-Control': 'no-cache'
-                    }
+                    },
+                    params: apiParams
                 });
                 
                 if (altResponse.data && Array.isArray(altResponse.data) && altResponse.data.length > 0) {
                     console.log("Found targets from alternative endpoint:", altResponse.data.length);
-                    return altResponse.data;
+                    return filterTargetsByDateRange(altResponse.data, filters);
                 }
             } catch (altError) {
                 console.warn("Alternative endpoint also failed:", altError.message);
@@ -197,8 +233,8 @@ export const getTeamMemberTargets = async () => {
                 ...target,
                 _id: targetId,
                 targetType: (target.targetType || 'sales').toLowerCase(), // Ensure lowercase for consistent filtering
-                targetAmount: parseFloat(target.targetAmount) || 0,
-                targetQty: parseFloat(target.targetQty) || 0,
+                targetAmount: parseFloat(target.targetAmount || 0),
+                targetQty: parseFloat(target.targetQty || 0),
                 month: parseInt(target.month) || new Date().getMonth() + 1,
                 year: parseInt(target.year) || new Date().getFullYear()
             };
@@ -211,7 +247,8 @@ export const getTeamMemberTargets = async () => {
             console.log("Sample target:", targets[0]);
         }
         
-        return targets;
+        // Apply client-side filtering for additional precision
+        return filterTargetsByDateRange(targets, filters);
     } catch (error) {
         console.error('Error fetching team member targets:', error);
         console.error('Error details:', error.response ? error.response.data : 'No response data');
@@ -224,12 +261,13 @@ export const getTeamMemberTargets = async () => {
                 headers: { 
                     Authorization: `Bearer ${token}`,
                     'Cache-Control': 'no-cache'
-                }
+                },
+                params: filters
             });
             
             if (altResponse.data && Array.isArray(altResponse.data)) {
                 console.log("Found targets from alternative endpoint after error:", altResponse.data.length);
-                return altResponse.data;
+                return filterTargetsByDateRange(altResponse.data, filters);
             }
         } catch (altError) {
             console.warn("Alternative endpoint also failed:", altError.message);
@@ -238,6 +276,71 @@ export const getTeamMemberTargets = async () => {
         return [];
     }
 };
+
+// Helper function to filter targets by date range
+function filterTargetsByDateRange(targets, filters) {
+    if (!targets || !Array.isArray(targets) || targets.length === 0) {
+        return [];
+    }
+    
+    // If no filters, return all targets
+    if (!filters || Object.keys(filters).length === 0) {
+        return targets;
+    }
+    
+    console.log("Applying client-side filters to targets:", filters);
+    let filteredTargets = [...targets];
+    
+    // Handle year-only filter
+    if (filters.year && !filters.month && !filters.startMonth && !filters.endMonth) {
+        const year = parseInt(filters.year);
+        console.log(`Filtering targets for year ${year} only`);
+        filteredTargets = filteredTargets.filter(target => parseInt(target.year) === year);
+    }
+    
+    // Handle month-only filter
+    if (filters.month && filters.year) {
+        const month = parseInt(filters.month);
+        const year = parseInt(filters.year);
+        console.log(`Filtering targets for month ${month}, year ${year}`);
+        filteredTargets = filteredTargets.filter(target => 
+            parseInt(target.year) === year && parseInt(target.month) === month
+        );
+    }
+    
+    // Handle date range filter
+    if (filters.startYear && filters.endYear) {
+        const startYear = parseInt(filters.startYear);
+        const endYear = parseInt(filters.endYear);
+        const startMonth = filters.startMonth ? parseInt(filters.startMonth) : 1;
+        const endMonth = filters.endMonth ? parseInt(filters.endMonth) : 12;
+        
+        console.log(`Filtering targets for date range: ${startMonth}/${startYear} to ${endMonth}/${endYear}`);
+        
+        filteredTargets = filteredTargets.filter(target => {
+            const targetYear = parseInt(target.year);
+            const targetMonth = parseInt(target.month);
+            
+            // Check if target date is within the range
+            if (targetYear < startYear || targetYear > endYear) {
+                return false;
+            }
+            
+            if (targetYear === startYear && targetMonth < startMonth) {
+                return false;
+            }
+            
+            if (targetYear === endYear && targetMonth > endMonth) {
+                return false;
+            }
+            
+            return true;
+        });
+    }
+    
+    console.log(`Applied filters: Found ${filteredTargets.length} targets from original ${targets.length}`);
+    return filteredTargets;
+}
 
 // Add New Target
 export const addTarget = async (targetData) => {
